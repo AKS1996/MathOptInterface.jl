@@ -261,7 +261,7 @@ function add_key_for_bridge(map::Map, bridge::AbstractBridge,
 end
 function add_key_for_bridge(map::Map, bridge::AbstractBridge,
                             func::MOI.VectorOfVariables, set::MOI.AbstractVectorSet)
-    index = first(func.variables).value
+    index = -abs(first(func.variables).value)
     map.vector_of_variables_constraints[(index, typeof(set))] = bridge
     return MOI.ConstraintIndex{MOI.VectorOfVariables, typeof(set)}(index)
 end

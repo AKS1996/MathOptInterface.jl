@@ -58,8 +58,15 @@ function is_bridged(b::AbstractBridgeOptimizer,
                     ci::MOI.ConstraintIndex{F, S}) where {
         F<:Union{MOI.SingleVariable, MOI.VectorOfVariables}, S}
     # `ci.value < 0` if it is variable-bridged or force-bridged
-    return is_bridged(b, F, S) || ci.value < 0
+    return is_bridged(b, F, S) || (is_bridged(b, S) && ci.value < 0)
 end
+
+function is_bridged(b::AbstractBridgeOptimizer,
+                    ci::MOI.ConstraintIndex{MOI.VectorOfVariables, S}) where S
+    # `ci.value < 0` if it is variable-bridged or force-bridged
+    return ci.value < 0
+end
+
 
 """
     is_bridged(b::AbstractBridgeOptimizer,
@@ -431,12 +438,15 @@ function reduce_bridged(
     init, model_value,
     operate_variable_bridges!,
     operate_constraint_bridges!)
-    if is_bridged(b, F, S)
-        value = init()
-    else
-        value = model_value()
-    end
     variable_function = F == MOIU.variable_function_type(S)
+    # A `F`-in-`S` could be added to the model either if it this constraint
+    # is not bridged or if variables constrained on creations to `S` are not bridged
+    # and `F` is `SingleVariable` or `VectorOfVariables`.
+    if !is_bridged(b, F, S) || (variable_function && !is_bridged(b, S))
+        value = model_value()
+    else
+        value = init()
+    end
     if variable_function && is_bridged(b, S)
         value = operate_variable_bridges!(value)
     end
@@ -993,10 +1003,6 @@ function MOI.supports_constraint(b::AbstractBridgeOptimizer,
                                  F::Type{<:MOI.AbstractFunction},
                                  S::Type{<:MOI.AbstractSet})
     if is_bridged(b, F, S)
-        if F == MOIU.variable_function_type(S) &&
-            supports_bridging_constrained_variable(b, S)
-            return true
-        end
         return supports_bridging_constraint(b, F, S)
     else
         return MOI.supports_constraint(b.model, F, S)
