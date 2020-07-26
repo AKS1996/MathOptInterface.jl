@@ -1008,48 +1008,62 @@ function add_bridged_constraint(b, BridgeType, f, s)
     Variable.register_context(Variable.bridges(b), ci)
     return ci
 end
-function MOI.add_constraint(b::AbstractBridgeOptimizer, f::MOI.AbstractFunction,
-                            s::MOI.AbstractSet)
-    if Variable.has_bridges(Variable.bridges(b))
-        if f isa MOI.SingleVariable
-            if is_bridged(b, f.variable)
-                if MOI.is_valid(b, MOI.ConstraintIndex{MOI.SingleVariable, typeof(s)}(f.variable.value))
-                    # The other constraint could have been through a variable bridge.
-                    error("Cannot add two `SingleVariable`-in-`$(typeof(s))`",
-                          " on the same variable $(f.variable).")
-                end
-                BridgeType = Constraint.concrete_bridge_type(
-                    constraint_scalar_functionize_bridge(b), typeof(f), typeof(s))
-                return add_bridged_constraint(b, BridgeType, f, s)
-            end
-        elseif f isa MOI.VectorOfVariables
-            if any(vi -> is_bridged(b, vi), f.variables)
-                if MOI.is_valid(b, MOI.ConstraintIndex{MOI.VectorOfVariables, typeof(s)}(first(f.variables).value))
-                    # The other constraint could have been through a variable bridge.
-                    error("Cannot add two `VectorOfVariables`-in-`$(typeof(s))`",
-                          " on the same first variable $(first(f.variables)).")
-                end
-                if !is_bridged(b, first(f.variables)) && !is_bridged(b, typeof(f), typeof(s))
-                    # The index of the contraint will have positive value hence
-                    # it would clash with the index space of `b.model` since
-                    # the constraint type is normally not bridged.
-                    error("Cannot `VectorOfVariables`-in-`$(typeof(s))` for",
-                          " which some variables are bridged but not the",
-                          " first one `$(first(f.variables))`.")
-                end
-                BridgeType = Constraint.concrete_bridge_type(
-                    constraint_vector_functionize_bridge(b), typeof(f), typeof(s))
-                return add_bridged_constraint(b, BridgeType, f, s)
-            end
-        else
-            f, s = bridged_constraint_function(b, f, s)
-        end
+
+function _add_bridged_constraint(
+    b::AbstractBridgeOptimizer, f::MOI.SingleVariable, s::S
+) where {S}
+    if !is_bridged(b, f.variable)
+        return _add_bridged_constraint_if_necessary(b, f, s)
     end
-    if is_bridged(b, typeof(f), typeof(s))
+    if MOI.is_valid(b, MOI.ConstraintIndex{MOI.SingleVariable, typeof(s)}(f.variable.value))
+        # The other constraint could have been through a variable bridge.
+        error("Cannot add two `SingleVariable`-in-`$(typeof(s))`",
+                " on the same variable $(f.variable).")
+    end
+    BridgeType = Constraint.concrete_bridge_type(
+        constraint_scalar_functionize_bridge(b), typeof(f), typeof(s))
+    return add_bridged_constraint(b, BridgeType, f, s)
+end
+
+function _add_bridged_constraint(
+    b::AbstractBridgeOptimizer, f::MOI.VectorOfVariables, s::S
+) where {S}
+    if all(vi -> !is_bridged(b, vi), f.variables)
+        return _add_bridged_constraint_if_necessary(b, f, s)
+    end
+    if MOI.is_valid(b, MOI.ConstraintIndex{MOI.VectorOfVariables, typeof(s)}(first(f.variables).value))
+        # The other constraint could have been through a variable bridge.
+        error("Cannot add two `VectorOfVariables`-in-`$(typeof(s))`",
+            " on the same first variable $(first(f.variables)).")
+    end
+    if !is_bridged(b, first(f.variables)) && !is_bridged(b, typeof(f), typeof(s))
+        # The index of the contraint will have positive value hence
+        # it would clash with the index space of `b.model` since
+        # the constraint type is normally not bridged.
+        error("Cannot `VectorOfVariables`-in-`$(typeof(s))` for",
+            " which some variables are bridged but not the",
+            " first one `$(first(f.variables))`.")
+    end
+    BridgeType = Constraint.concrete_bridge_type(
+        constraint_vector_functionize_bridge(b), typeof(f), typeof(s))
+    return add_bridged_constraint(b, BridgeType, f, s)
+end
+
+function _add_bridged_constraint(
+    b::AbstractBridgeOptimizer, f::F, s::S
+) where {F, S}
+    ff, ss = bridged_constraint_function(b, f, s)
+    return _add_bridged_constraint_if_necessary(b, ff, ss)
+end
+
+function _add_bridged_constraint_if_necessary(
+    b::AbstractBridgeOptimizer, f::F, s::S
+)::MOI.ConstraintIndex{F, S} where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
+    if is_bridged(b, F, S)
         # We compute `BridgeType` first as `concrete_bridge_type` calls
         # `bridge_type` which might throw an `UnsupportedConstraint` error in
         # which case, we do not want any modification to have been done
-        BridgeType = Constraint.concrete_bridge_type(b, typeof(f), typeof(s))
+        BridgeType = Constraint.concrete_bridge_type(b, F, S)
         # `add_constraint` might throw an `UnsupportedConstraint` but no
         # modification has been done in the previous line
         return add_bridged_constraint(b, BridgeType, f, s)
@@ -1057,6 +1071,15 @@ function MOI.add_constraint(b::AbstractBridgeOptimizer, f::MOI.AbstractFunction,
         return MOI.add_constraint(b.model, f, s)
     end
 end
+function MOI.add_constraint(
+    b::AbstractBridgeOptimizer, f::F, s::S
+)::MOI.ConstraintIndex{F, S} where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
+    if Variable.has_bridges(Variable.bridges(b))
+        return _add_bridged_constraint(b, f, s)
+    end
+    return _add_bridged_constraint_if_necessary(b, f, s)
+end
+
 function MOI.add_constraints(b::AbstractBridgeOptimizer, f::Vector{F},
                              s::Vector{S}) where { F <: MOI.AbstractFunction,
                              S <: MOI.AbstractSet}

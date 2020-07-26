@@ -3,26 +3,117 @@
 
 Transforms a constraint `G`-in-`scalar_set_type(S, T)` where
 `S <: VectorLinearSet` to `F`-in-`S`.
+
+## Examples
+
+The constraint `SingleVariable -in- LessThan{Float64}` becomes
+`VectorAffineFunction{Float64} -in- Nonpositives`, where `T = Float64`,
+`F = VectorAffineFunction{Float64}`, `S = Nonpositives`, and
+`G = SingleVariable`.
 """
 mutable struct VectorizeBridge{T, F, S, G} <: AbstractBridge
     vector_constraint::CI{F, S}
     set_constant::T # constant in scalar set
 end
-function bridge_constraint(::Type{VectorizeBridge{T, F, S, G}},
-                           model::MOI.ModelLike, g::G,
-                           set::MOIU.ScalarLinearSet{T}) where {T, F, S, G}
-    set_constant = MOI.constant(set)
-    h = MOIU.operate(-, T, g, set_constant)
-    if -set_constant != MOI.constant(h)[1]
-        # This means the constant in `f` was not zero
-        constant = MOI.constant(h)[1] + set_constant
-        throw(MOI.ScalarFunctionConstantNotZero{typeof(constant), G,
-                                                typeof(set)}(constant))
+
+function bridge_constraint(
+    ::Type{VectorizeBridge{T, F, S, G}},
+    model::MOI.ModelLike,
+    g::G,
+    set::MOIU.ScalarLinearSet{T}
+) where {T, F, S, G}
+    g_const = MOI.constant(g, T)
+    if !iszero(g_const)
+        throw(
+            MOI.ScalarFunctionConstantNotZero{
+                typeof(g_const), G, typeof(set)
+            }(g_const)
+        )
     end
-    f = MOIU.operate(vcat, T, h)
-    vector_constraint = MOI.add_constraint(model, f, S(1))
-    return VectorizeBridge{T, F, S, G}(vector_constraint, set_constant)
+    vaf = _vectorized_convert(F, g)
+    set_const = MOI.constant(set)
+    MOIU.operate_output_index!(-, T, 1, vaf, set_const)
+    vector_constraint = MOI.add_constraint(model, vaf, S(1))
+    return VectorizeBridge{T, F, S, G}(vector_constraint, set_const)
 end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorOfVariables}, g::MOI.SingleVariable
+)
+    return MOI.VectorOfVariables([g.variable])
+end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorAffineFunction{T}}, g::MOI.SingleVariable
+) where {T}
+    return MOI.VectorAffineFunction{T}(
+        [MOI.VectorAffineTerm(1, MOI.ScalarAffineTerm(1.0, g.variable))],
+        [zero(T)]
+    )
+end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorQuadraticFunction{T}}, g::MOI.SingleVariable
+) where {T}
+    return MOI.VectorQuadraticFunction{T}(
+        [MOI.VectorAffineTerm(1, MOI.ScalarQuadraticTerm(1.0, g.variable))],
+        MOI.VectorQuadraticTerm{T}[],
+        [zero(T)]
+    )
+end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorAffineFunction{T}}, g::MOI.ScalarAffineFunction
+) where {T}
+    return MOI.VectorAffineFunction{T}(
+        MOI.VectorAffineTerm{T}[
+            MOI.VectorAffineTerm(1, term) for term in g.terms
+        ],
+        [g.constant]
+    )
+end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorQuadraticFunction{T}}, g::MOI.ScalarAffineFunction
+) where {T}
+    return MOI.VectorQuadraticFunction{T}(
+        MOI.VectorAffineTerm{T}[
+            MOI.VectorAffineTerm(1, term) for term in g.terms
+        ],
+        MOI.VectorQuadraticTerm{T}[],
+        [g.constant]
+    )
+end
+
+function _vectorized_convert(
+    ::Type{MOI.VectorQuadraticFunction{T}}, g::MOI.ScalarQuadraticFunction
+) where {T}
+    return MOI.VectorQuadraticFunction{T}(
+        MOI.VectorAffineTerm{T}[
+            MOI.VectorAffineTerm(1, term) for term in g.affine_terms
+        ],
+        MOI.VectorQuadraticTerm{T}[
+            MOI.VectorQuadraticTerm(1, term) for term in g.quadratic_terms
+        ],
+        [g.constant]
+    )
+end
+
+# function bridge_constraint(::Type{VectorizeBridge{T, F, S, G}},
+#                            model::MOI.ModelLike, g::G,
+#                            set::MOIU.ScalarLinearSet{T}) where {T, F, S, G}
+#     set_constant = MOI.constant(set)
+#     h = MOIU.operate(-, T, g, set_constant)
+#     if -set_constant != MOI.constant(h)[1]
+#         # This means the constant in `f` was not zero
+#         constant = MOI.constant(h)[1] + set_constant
+#         throw(MOI.ScalarFunctionConstantNotZero{typeof(constant), G,
+#                                                 typeof(set)}(constant))
+#     end
+#     f = MOIU.operate(vcat, T, h)
+#     vector_constraint = MOI.add_constraint(model, f, S(1))
+#     return VectorizeBridge{T, F, S, G}(vector_constraint, set_constant)
+# end
 
 function MOI.supports_constraint(::Type{VectorizeBridge{T}},
                                 ::Type{<:MOI.AbstractScalarFunction},

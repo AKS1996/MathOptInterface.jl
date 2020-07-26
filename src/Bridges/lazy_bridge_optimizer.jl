@@ -35,6 +35,7 @@ mutable struct LazyBridgeOptimizer{OT<:MOI.ModelLike} <: AbstractBridgeOptimizer
     variable_types::Vector{Tuple{DataType}}
     # List of types of available bridges
     constraint_bridge_types::Vector{Any}
+    cached_concrete_bridge_type::Dict{Any, Any}
     constraint_node::OrderedDict{Tuple{DataType, DataType}, ConstraintNode}
     constraint_types::Vector{Tuple{DataType, DataType}}
     # List of types of available bridges
@@ -50,7 +51,7 @@ function LazyBridgeOptimizer(model::MOI.ModelLike)
         Objective.Map(),
         Graph(),
         nothing, Any[], OrderedDict{Tuple{DataType}, VariableNode}(), Tuple{DataType}[],
-        Any[], OrderedDict{Tuple{DataType, DataType}, ConstraintNode}(), Tuple{DataType, DataType}[],
+        Any[], Dict{Any, Any}(), OrderedDict{Tuple{DataType, DataType}, ConstraintNode}(), Tuple{DataType, DataType}[],
         Any[], OrderedDict{Tuple{DataType}, ObjectiveNode}(), Tuple{DataType}[],)
 end
 
@@ -113,7 +114,7 @@ end
 
 function node(b::LazyBridgeOptimizer, S::Type{<:MOI.AbstractSet})
     F = MOIU.variable_function_type(S)
-    if (MOI.supports_constraint(b.model, F, S) 
+    if (MOI.supports_constraint(b.model, F, S)
         || (S <: MOI.AbstractScalarSet && MOI.supports_add_constrained_variable(b.model, S))
         || (S <: MOI.AbstractVectorSet && MOI.supports_add_constrained_variables(b.model, S)))
         return VariableNode(0)
@@ -320,18 +321,30 @@ function bridge_type(b::LazyBridgeOptimizer, ::Type{MOI.Reals})
     return b.variable_free_bridge_type
 end
 function bridge_type(b::LazyBridgeOptimizer, S::Type{<:MOI.AbstractSet})
+    bridge_type = get(b.cached_concrete_bridge_type, (S,), nothing)
+    if bridge_type !== nothing
+        return bridge_type
+    end
     index = bridge_index(b, S)
     if iszero(index)
         throw(MOI.UnsupportedConstraint{MOIU.variable_function_type(S), S}())
     end
-    return Variable.concrete_bridge_type(b.variable_bridge_types[index], S)
+    bridge_type2 = Variable.concrete_bridge_type(b.variable_bridge_types[index], S)
+    b.cached_concrete_bridge_type[(S,)] = bridge_type2
+    return bridge_type2
 end
 function bridge_type(b::LazyBridgeOptimizer, F::Type{<:MOI.AbstractFunction}, S::Type{<:MOI.AbstractSet})
+    bridge_type = get(b.cached_concrete_bridge_type, (F, S), nothing)
+    if bridge_type !== nothing
+        return bridge_type
+    end
     index = bridge_index(b, F, S)
     if iszero(index)
         throw(MOI.UnsupportedConstraint{F, S}())
     end
-    return Constraint.concrete_bridge_type(b.constraint_bridge_types[index], F, S)
+    bridge_type2 = Constraint.concrete_bridge_type(b.constraint_bridge_types[index], F, S)
+    b.cached_concrete_bridge_type[(F, S)] = bridge_type2
+    return bridge_type2
 end
 function bridge_type(b::LazyBridgeOptimizer, F::Type{<:MOI.AbstractScalarFunction})
     index = bridge_index(b, F)
